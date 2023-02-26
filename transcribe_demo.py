@@ -15,23 +15,49 @@ from sys import platform
 
 
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="medium", help="Model to use",
                         choices=["tiny", "base", "small", "medium", "large"])
     parser.add_argument("--non_english", action='store_true',
                         help="Don't use the english model.")
+    parser.add_argument("--translate", action='store_true',
+                        help="do we want the model to translate to english?")
     parser.add_argument("--energy_threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
     parser.add_argument("--record_timeout", default=2,
                         help="How real time the recording is in seconds.", type=float)
-    parser.add_argument("--phrase_timeout", default=3,
+    parser.add_argument("--phrase_timeout", default=.25,
                         help="How much empty space between recordings before we "
-                             "consider it a new line in the transcription.", type=float)  
+                             "consider it a new line in the transcription.", type=float)
+
     if 'linux' in platform:
         parser.add_argument("--default_microphone", default='pulse',
                             help="Default microphone name for SpeechRecognition. "
                                  "Run this with 'list' to view available Microphones.", type=str)
     args = parser.parse_args()
+
+    # note: I wrote this code to enable fp16 if apple mps device is detected, and fp16 did work without errors,
+    # but it didnt seem to reduce ram or GPU usage and it seemed to make the translation much worse.
+    # I didn't do much testing of this so maybe it's not worth mentioning but i have decided not to use fp16 on mac
+
+    # if torch.cuda.is_available() or torch.backends.mps.is_available():
+    #     print('cuda or mps detected')
+    #     use_fp16 = True
+    # else:
+    #     use_fp16 = False
+
+    if torch.cuda.is_available():
+        use_fp16 = True
+    else:
+        use_fp16 = False
+
+    if args.translate:
+        print('doing translation')
+        transcription_task = 'translate'
+    else:
+        print('not doing translation')
+        transcription_task = None
     
     # The last time a recording was retreived from the queue.
     phrase_time = None
@@ -67,6 +93,7 @@ def main():
     if args.model != "large" and not args.non_english:
         model = model + ".en"
     audio_model = whisper.load_model(model)
+
 
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
@@ -121,8 +148,10 @@ def main():
                     f.write(wav_data.read())
 
                 # Read the transcription.
-                result = audio_model.transcribe(temp_file, fp16=torch.cuda.is_available())
+                result = audio_model.transcribe(temp_file, fp16=use_fp16, task=transcription_task)
+
                 text = result['text'].strip()
+                #text = result
 
                 # If we detected a pause between recordings, add a new item to our transcripion.
                 # Otherwise edit the existing one.
